@@ -554,8 +554,69 @@ func (s *Server) isValidRedirectURI(client *models.OAuthServerClient, redirectUR
 		if registeredURI == redirectURI {
 			return true
 		}
+		// OAuth 2.1 §2.3.1 / RFC 8252 §7.3 loopback exemption: when the
+		// registered redirect is a portless http loopback literal,
+		// allow any ephemeral port on the same host/path (scheme, host
+		// literal, path, query must still match exactly).
+		if isLoopbackRedirectMatch(registeredURI, redirectURI) {
+			return true
+		}
 	}
 	return false
+}
+
+func isLoopbackHost(host string) bool {
+	h := strings.ToLower(host)
+	return h == "127.0.0.1" || h == "::1" || h == "localhost"
+}
+
+func isLoopbackRedirectMatch(registered, requested string) bool {
+	regURL, err := url.Parse(registered)
+	if err != nil {
+		return false
+	}
+	reqURL, err := url.Parse(requested)
+	if err != nil {
+		return false
+	}
+	// Only http loopback gets the port exemption.
+	if regURL.Scheme != "http" || reqURL.Scheme != "http" {
+		return false
+	}
+	if regURL.Host == "" || reqURL.Host == "" {
+		return false
+	}
+	regHost := regURL.Hostname()
+	reqHost := reqURL.Hostname()
+	if !isLoopbackHost(regHost) || !isLoopbackHost(reqHost) {
+		return false
+	}
+	// Host literal must be the same (127.0.0.1 vs localhost are distinct registrations).
+	if strings.ToLower(regHost) != strings.ToLower(reqHost) {
+		return false
+	}
+	// Registered must be portless; requested must carry an ephemeral port.
+	// (If both are portless the exact-match branch above would have already
+	// returned true; if registered has a port we require exact match.)
+	if regURL.Port() != "" {
+		return false
+	}
+	if reqURL.Port() == "" {
+		return false
+	}
+	if regURL.Path != reqURL.Path {
+		return false
+	}
+	if regURL.RawQuery != reqURL.RawQuery {
+		return false
+	}
+	if regURL.Fragment != reqURL.Fragment {
+		return false
+	}
+	if regURL.User.String() != reqURL.User.String() {
+		return false
+	}
+	return true
 }
 
 func (s *Server) consentCoversScopes(consent *models.OAuthServerConsent, requestedScope string) bool {
